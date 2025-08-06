@@ -1,12 +1,7 @@
 """
-Partie 2 : Modèle d'Optimisation Linéaire pour la Maximisation de la Rentabilité Bancaire
-Scénario 2 : Ralentissement Économique - Stratégie "Sécurisation des Actifs"
-
-Ce script implémente un modèle d'optimisation linéaire pour maximiser la rentabilité de la banque
-tout en respectant les contraintes budgétaires et de risque pour le Scénario 2.
-
-Auteur: Assistant IA
-Date: 2025-01-30
+Scénario 2 : Sécurisation des Actifs
+Stratégie d'optimisation pour période de ralentissement économique
+Protège le capital avec un risque très faible (≤ 5%)
 """
 
 import pandas as pd
@@ -24,12 +19,8 @@ from data_cleaning_module import clean_dataset
 plt.style.use('default')
 sns.set_palette("husl")
 
-print("PARTIE 2 : MODÈLE D'OPTIMISATION LINÉAIRE - SCÉNARIO 2")
-print("Stratégie : Sécurisation des Actifs (Ralentissement Économique)")
-print("-" * 60)
-
-# 1. Chargement et préparation des données
-print("\n1. Chargement des données")
+print("Scénario 2 : Sécurisation des Actifs")
+print("Chargement et nettoyage des données...")
 
 try:
     df_original = pd.read_excel('content/credit_risk_dataset.xlsx')
@@ -62,10 +53,7 @@ try:
             df[col] = df_encoded[col]
     
     available_features = [col for col in feature_columns if col in df.columns]
-    print(f"Features disponibles: {len(available_features)}")
-
-    # Calcul du score de risque ajusté pour le Scénario 2 (Ralentissement Économique)
-    # Conditions défavorables augmentent significativement les risques
+    # Calcul du score de risque pour le Scénario 2
     base_risk_score = (
         (df['loan_percent_income'] * 0.45) +  # Impact plus fort du ratio prêt/revenu
         (df['loan_int_rate'] / 100 * 0.35) +  # Taux d'intérêt plus pénalisant
@@ -100,29 +88,20 @@ try:
     seuil_optimal = 0.12  # Seuil optimisé pour avoir suffisamment de clients à faible risque
     df['Yi'] = (df['PD_calibrée'] <= seuil_optimal).astype(int)
     
-    print(f"Seuil optimal: {seuil_optimal}")
-    print(f"Probabilités de défaut calculées")
-    
     # Filtrer les clients solvables
     clients_solvables = df[df['Yi'] == 1].copy()
-    print(f"Clients solvables: {len(clients_solvables)} / {len(df)} ({(len(clients_solvables)/len(df))*100:.1f}%)")
+    print(f"Clients solvables: {len(clients_solvables):,}")
 
 except Exception as e:
-    print(f"Erreur lors du chargement: {e}")
+    print(f"Erreur: {e}")
     exit(1)
 
-# 2. Paramètres du Scénario 2
-print("\n2. Paramètres du scénario")
-
-# Budget et contraintes pour Sécurisation des Actifs
+# Paramètres du Scénario 2
 BUDGET_TOTAL = 124_972_520
-TAUX_RISQUE = 0.05  # 5% (selon les exigences du Scénario 2)
-# Pour "Sécurisation des Actifs", utiliser 75% du budget pour permettre plus de clients
-BUDGET_CONSERVATEUR = int(BUDGET_TOTAL * 0.75)  # ~93.7M euros
+TAUX_RISQUE = 0.05  # 5%
+BUDGET_CONSERVATEUR = int(BUDGET_TOTAL * 0.75)  # 75% du budget
 
-print(f"Budget total disponible: {BUDGET_TOTAL:,} euros")
-print(f"Budget conservateur: {BUDGET_CONSERVATEUR:,} euros (75%)")
-print(f"Taux de risque cible: {TAUX_RISQUE*100}% (selon exigences Scénario 2)")
+print(f"Budget: {BUDGET_CONSERVATEUR:,} euros, Risque max: {TAUX_RISQUE*100}%")
 
 # 3. Répartition stratégique par objectif (Scénario 2)
 print("\n3. Répartition stratégique par objectif")

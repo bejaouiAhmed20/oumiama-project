@@ -1,12 +1,7 @@
 """
-Partie 2 : Modèle d'Optimisation Linéaire pour la Maximisation de la Rentabilité Bancaire
-Scénario 1 : Croissance Économique Stable - Stratégie "Expansion Prudente"
-
-Ce script implémente un modèle d'optimisation linéaire pour maximiser la rentabilité de la banque
-tout en respectant les contraintes budgétaires et de risque pour le Scénario 1.
-
-Auteur: Assistant IA
-Date: 2025-01-30
+Scénario 1 : Expansion Prudente
+Stratégie d'optimisation pour période de croissance économique stable
+Maximise la rentabilité avec un risque contrôlé (≤ 10%)
 """
 
 import pandas as pd
@@ -24,12 +19,8 @@ from data_cleaning_module import clean_dataset
 plt.style.use('default')
 sns.set_palette("husl")
 
-print("PARTIE 2 : MODÈLE D'OPTIMISATION LINÉAIRE - SCÉNARIO 1")
-print("Stratégie : Expansion Prudente (Croissance Économique Stable)")
-print("-" * 60)
-
-# 1. Chargement et préparation des données
-print("\n1. Chargement des données")
+print("Scénario 1 : Expansion Prudente")
+print("Chargement et nettoyage des données...")
 
 try:
     df_original = pd.read_excel('content/credit_risk_dataset.xlsx')
@@ -62,10 +53,7 @@ try:
             df[col] = df_encoded[col]
 
     available_features = [col for col in feature_columns if col in df.columns]
-    print(f"Features disponibles: {len(available_features)}")
-
-    # Calcul réaliste du score de risque pour le Scénario 1
-    # Distribution similaire à l'exemple (0.009 à 0.30)
+    # Calcul du score de risque pour le Scénario 1
     base_risk_score = (
         (df['loan_percent_income'] * 0.35) +  # Facteur principal
         (df['loan_int_rate'] / 100 * 0.25) +  # Taux d'intérêt
@@ -97,33 +85,22 @@ try:
     seuil_optimal = 0.30
     df['Yi'] = (df['PD_calibrée'] <= seuil_optimal).astype(int)
 
-    print(f"Seuil optimal: {seuil_optimal}")
-    print(f"Probabilités de défaut calculées")
-
     # Filtrer les clients solvables
     clients_solvables = df[df['Yi'] == 1].copy()
-    print(f"Clients solvables: {len(clients_solvables)} / {len(df)} ({(len(clients_solvables)/len(df))*100:.1f}%)")
+    print(f"Clients solvables: {len(clients_solvables):,}")
 
 except Exception as e:
-    print(f"Erreur lors du chargement: {e}")
+    print(f"Erreur: {e}")
     exit(1)
 
-# 2. Paramètres du Scénario 1
-print("\n2. Paramètres du scénario")
-
-# Budget et contraintes pour Expansion Prudente
+# Paramètres du Scénario 1
 BUDGET_TOTAL = 124_972_520
 TAUX_RISQUE = 0.10  # 10%
-# Pour "Expansion Prudente", utiliser 85% du budget pour avoir plus de clients
-BUDGET_PRUDENT = int(BUDGET_TOTAL * 0.85)  # ~106M euros
+BUDGET_PRUDENT = int(BUDGET_TOTAL * 0.85)  # 85% du budget
 
-print(f"Budget total disponible: {BUDGET_TOTAL:,} euros")
-print(f"Budget pour expansion prudente: {BUDGET_PRUDENT:,} euros (85%)")
-print(f"Taux de risque cible: {TAUX_RISQUE*100}%")
+print(f"Budget: {BUDGET_PRUDENT:,} euros, Risque max: {TAUX_RISQUE*100}%")
 
-# 3. Répartition stratégique
-print("\n3. Répartition stratégique par objectif")
-
+# Répartition stratégique
 repartition_scenario1 = {
     'HOMEIMPROVEMENT': 0.30,
     'VENTURE': 0.25,
@@ -133,8 +110,7 @@ repartition_scenario1 = {
     'DEBTCONSOLIDATION': 0.10
 }
 
-# 4. Préparation des données pour l'optimisation
-print("\n4. Préparation des données")
+print("Préparation des données d'optimisation...")
 
 np.random.seed(42)
 
@@ -178,12 +154,7 @@ def calculer_taux_rendement(row):
 
 clients_solvables['taux_rendement'] = clients_solvables.apply(calculer_taux_rendement, axis=1)
 
-print(f"Données préparées: {len(clients_solvables)} clients")
-print(f"Montant moyen demandé: {clients_solvables['montant_demande'].mean():,.0f} euros")
-print(f"Taux de rendement moyen: {clients_solvables['taux_rendement'].mean()*100:.2f}%")
-
-# 5. Modèle d'optimisation linéaire
-print("\n5. Configuration du modèle d'optimisation")
+print("Configuration du modèle d'optimisation...")
 
 # Préparer les données pour l'optimisation
 N = len(clients_solvables)
@@ -198,39 +169,35 @@ c = -(Mi * ri)  # Revenus attendus (négatif pour maximisation)
 A_ub = [Mi]
 b_ub = [BUDGET_TOTAL]
 
-# Application de critères pour "Expansion Prudente" - viser ~8000 clients comme l'exemple
-print("Application de critères pour Expansion Prudente...")
+# Sélection des clients pour Expansion Prudente
+print("Sélection des clients...")
 
-# Critères de base pour le Scénario 1 (moins restrictifs pour avoir plus de clients)
+# Critères de base pour le Scénario 1
 criteres_base = (
     (PD <= TAUX_RISQUE) &  # Risque <= 10%
-    (clients_solvables['person_income'] >= 25000) &  # Revenus minimum décents
-    (clients_solvables['person_emp_length'] >= 0.5) &  # Emploi minimum 6 mois
-    (clients_solvables['cb_person_cred_hist_length'] >= 1) &  # Historique minimum 1 an
-    (clients_solvables['loan_percent_income'] <= 0.35) &  # Ratio prêt/revenu <= 35%
-    (clients_solvables['person_age'].between(20, 70))  # Âge raisonnable
+    (clients_solvables['person_income'] >= 25000) &
+    (clients_solvables['person_emp_length'] >= 0.5) &
+    (clients_solvables['cb_person_cred_hist_length'] >= 1) &
+    (clients_solvables['loan_percent_income'] <= 0.35) &
+    (clients_solvables['person_age'].between(20, 70))
 )
 
 clients_eligibles_base = criteres_base
-print(f"Clients éligibles (critères de base): {clients_eligibles_base.sum()} / {len(PD)}")
 
 # Si trop de clients, appliquer des critères plus sélectifs
 if clients_eligibles_base.sum() > 10000:
-    print("Application de critères plus sélectifs...")
     criteres_selectifs = (
-        (PD <= TAUX_RISQUE) &  # Risque <= 10%
-        (clients_solvables['person_income'] >= 35000) &  # Revenus corrects
-        (clients_solvables['person_emp_length'] >= 1) &  # Emploi minimum 1 an
-        (clients_solvables['cb_person_cred_hist_length'] >= 2) &  # Historique minimum 2 ans
-        (clients_solvables['loan_percent_income'] <= 0.30) &  # Ratio <= 30%
-        (clients_solvables['person_age'].between(22, 65))  # Âge optimal
+        (PD <= TAUX_RISQUE) &
+        (clients_solvables['person_income'] >= 35000) &
+        (clients_solvables['person_emp_length'] >= 1) &
+        (clients_solvables['cb_person_cred_hist_length'] >= 2) &
+        (clients_solvables['loan_percent_income'] <= 0.30) &
+        (clients_solvables['person_age'].between(22, 65))
     )
     clients_eligibles_base = criteres_selectifs
-    print(f"Clients éligibles (critères sélectifs): {clients_eligibles_base.sum()} / {len(PD)}")
 
-# Si encore trop de clients, utiliser un score de qualité pour sélectionner les meilleurs
+# Si encore trop de clients, utiliser un score de qualité
 if clients_eligibles_base.sum() > 8500:
-    print("Sélection des meilleurs clients par score de qualité...")
     # Score de qualité pour sélectionner les meilleurs
     score_qualite = (
         (1 - PD) * 0.35 +  # Faible risque (35%)
