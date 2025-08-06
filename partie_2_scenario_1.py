@@ -17,6 +17,9 @@ from scipy.optimize import linprog
 import warnings
 warnings.filterwarnings('ignore')
 
+# Import data cleaning module
+from data_cleaning_module import clean_dataset
+
 # Configuration pour l'affichage
 plt.style.use('default')
 sns.set_palette("husl")
@@ -32,8 +35,11 @@ try:
     df_original = pd.read_excel('content/credit_risk_dataset.xlsx')
     print(f"Dataset original: {df_original.shape[0]} clients")
 
+    # Data cleaning and validation
+    df_clean, cleaning_report = clean_dataset(df_original, "Scénario 1 - Expansion Prudente")
+
     # Préprocessing
-    df = df_original.copy()
+    df = df_clean.copy()
     df = df.dropna()
 
     # Encodage des variables catégorielles
