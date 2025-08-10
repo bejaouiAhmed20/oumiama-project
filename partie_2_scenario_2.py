@@ -53,7 +53,7 @@ try:
             df[col] = df_encoded[col]
     
     available_features = [col for col in feature_columns if col in df.columns]
-    # Calcul du score de risque pour le Scénario 2
+
     base_risk_score = (
         (df['loan_percent_income'] * 0.45) +  # Impact plus fort du ratio prêt/revenu
         (df['loan_int_rate'] / 100 * 0.35) +  # Taux d'intérêt plus pénalisant
@@ -97,11 +97,15 @@ except Exception as e:
     exit(1)
 
 # Paramètres du Scénario 2
-BUDGET_TOTAL = 124_972_520
+BUDGET_TOTAL = 93_729_390  # Budget fixe pour les deux scénarios
 TAUX_RISQUE = 0.05  # 5%
-BUDGET_CONSERVATEUR = int(BUDGET_TOTAL * 0.75)  # 75% du budget
+LGD = 0.6  # Loss Given Default = 60% (paramètre manquant ajouté)
+# Scénario 2: Sécurisation - utiliser moins de budget pour être plus conservateur
+BUDGET_UTILISE = int(BUDGET_TOTAL * 0.75)  # 75% du budget pour sécurisation
 
-print(f"Budget: {BUDGET_CONSERVATEUR:,} euros, Risque max: {TAUX_RISQUE*100}%")
+print(f"Budget total: {BUDGET_TOTAL:,} euros")
+print(f"Budget utilisé (sécurisation): {BUDGET_UTILISE:,} euros (75%)")
+print(f"Risque max: {TAUX_RISQUE*100}%, LGD: {LGD*100}%")
 
 # 3. Répartition stratégique par objectif (Scénario 2)
 print("\n3. Répartition stratégique par objectif")
@@ -168,186 +172,148 @@ print(f"Données préparées: {len(clients_solvables)} clients")
 print(f"Montant moyen demandé: {clients_solvables['montant_demande'].mean():,.0f} euros")
 print(f"Taux de rendement moyen: {clients_solvables['taux_rendement'].mean()*100:.2f}%")
 
-# 5. Configuration du modèle d'optimisation
-print("\n5. Configuration du modèle d'optimisation")
-
 # Préparer les données pour l'optimisation
 N = len(clients_solvables)
 Mi = clients_solvables['montant_demande'].values
 ri = clients_solvables['taux_rendement'].values
 PD = clients_solvables['PD_calibrée'].values
 
-# Application de critères pour "Sécurisation des Actifs" - viser 6500-7500 clients
-print("Application de critères pour Sécurisation des Actifs (6500-7500 clients)...")
+# Fonction objectif: Maximiser le profit net attendu
+# profit_i = ri * Mi - PDi * LGD * Mi (revenus - pertes attendues)
+profit_net = Mi * ri - PD * LGD * Mi
+c = -profit_net  # Négatif pour maximisation avec linprog
 
-# Approche réaliste: sélectionner d'abord un large pool, puis optimiser pour respecter le risque de 5%
-# Critères de base très larges pour avoir un pool suffisant
-criteres_base = (
-    (PD <= 0.12) &  # Utiliser le seuil de solvabilité optimisé
-    (clients_solvables['person_income'] >= 5000) &  # Revenus minimum très bas
-    (clients_solvables['person_emp_length'] >= 0.01) &  # Emploi minimum 0.12 mois
-    (clients_solvables['cb_person_cred_hist_length'] >= 0.05) &  # Historique minimum 0.6 mois
-    (clients_solvables['loan_percent_income'] <= 0.80) &  # Ratio très large <= 80%
-    (clients_solvables['person_age'].between(18, 90))  # Âge très large
-)
+# Contraintes d'inégalité (A_ub × x ≤ b_ub)
+A_ub = []
+b_ub = []
 
-clients_eligibles_base = criteres_base
-print(f"Clients éligibles (pool large): {clients_eligibles_base.sum()} / {len(PD)}")
+# 1. Contrainte budgétaire: Σ(Mi × Yi) ≤ BUDGET_UTILISE
+A_ub.append(Mi)
+b_ub.append(BUDGET_UTILISE)
 
-# Sélectionner les 7000 meilleurs clients par score de qualité
-if clients_eligibles_base.sum() > 7000:
-    print("Sélection des 7000 meilleurs clients par score de qualité...")
-    # Score de qualité privilégiant le faible risque
-    score_qualite = (
-        (1 - PD) * 0.60 +  # Faible risque (60% - priorité absolue)
-        (clients_solvables['person_income'] / 100000) * 0.20 +  # Revenus (20%)
-        (clients_solvables['person_emp_length'] / 15) * 0.10 +  # Stabilité emploi (10%)
-        (clients_solvables['cb_person_cred_hist_length'] / 20) * 0.10  # Historique (10%)
-    )
+# 2. Contrainte de risque: Σ(PDi × Mi × Yi) ≤ TR × B
+A_ub.append(PD * Mi)
+b_ub.append(TAUX_RISQUE * BUDGET_UTILISE)
 
-    # Calculer le score seulement pour les clients éligibles
-    score_eligibles = score_qualite[clients_eligibles_base]
+# 3. Contraintes d'allocation par catégorie de prêt
+# Pour chaque catégorie: pct × B × (1-ε) ≤ Σ(Mi × Yi pour cette catégorie) ≤ pct × B × (1+ε)
+epsilon = 0.05  # Tolérance de 5%
 
-    # Sélectionner exactement 7000 clients (milieu de la fourchette 6500-7500)
-    nb_a_selectionner = min(7000, clients_eligibles_base.sum())
-    seuil_score = score_eligibles.nlargest(nb_a_selectionner).iloc[-1]
+# Créer des masques pour chaque catégorie de prêt
+categories_masks = {}
+for categorie in repartition_scenario2.keys():
+    mask = (clients_solvables['loan_intent'] == categorie).values
+    categories_masks[categorie] = mask
 
-    clients_faible_risque = clients_eligibles_base & (score_qualite >= seuil_score)
-    print(f"Sélection finale: {clients_faible_risque.sum()} clients (cible 6500-7500)")
-else:
-    clients_faible_risque = clients_eligibles_base
-    print(f"Pool disponible: {clients_faible_risque.sum()} clients")
+    if mask.sum() > 0:  # Si on a des clients dans cette catégorie
+        pct_target = repartition_scenario2[categorie]
+        budget_min = pct_target * BUDGET_UTILISE * (1 - epsilon)
+        budget_max = pct_target * BUDGET_UTILISE * (1 + epsilon)
 
-# Préparation des données pour l'optimisation
-Mi_filtre = Mi[clients_faible_risque]
-ri_filtre = ri[clients_faible_risque]
-PD_filtre = PD[clients_faible_risque]
-indices_filtre = np.where(clients_faible_risque)[0]
+        # Contrainte minimum: -Σ(Mi × Yi pour catégorie) ≤ -budget_min
+        A_ub.append(-(Mi * mask))
+        b_ub.append(-budget_min)
 
-risque_moyen_filtre = np.average(PD_filtre, weights=Mi_filtre)
-print(f"Risque moyen pondéré: {risque_moyen_filtre*100:.2f}%")
+        # Contrainte maximum: Σ(Mi × Yi pour catégorie) ≤ budget_max
+        A_ub.append(Mi * mask)
+        b_ub.append(budget_max)
 
-c_filtre = -(Mi_filtre * ri_filtre)
-A_ub_filtre = [Mi_filtre]
-b_ub_filtre = [BUDGET_CONSERVATEUR]  # Utiliser le budget conservateur
-bounds_filtre = [(0, 1) for _ in range(len(Mi_filtre))]
+# Bornes des variables (0 ≤ Yi ≤ 1, variables binaires)
+bounds = [(0, 1) for _ in range(N)]
 
-print(f"Optimisation configurée pour {len(Mi_filtre)} clients")
-print(f"Budget d'optimisation: {BUDGET_CONSERVATEUR:,} euros")
-
-# 6. Résolution de l'optimisation
-print("\n6. Résolution de l'optimisation")
+# Résolution de l'optimisation linéaire
 
 try:
-    result = linprog(c_filtre, A_ub=A_ub_filtre, b_ub=b_ub_filtre, bounds=bounds_filtre, method='highs')
+    # Convertir les listes en arrays numpy
+    A_ub_array = np.array(A_ub)
+    b_ub_array = np.array(b_ub)
+
+    result = linprog(c, A_ub=A_ub_array, b_ub=b_ub_array, bounds=bounds, method='highs')
 
     if result.success:
-        print("Optimisation réussie")
 
-        Yi_optimal_filtre = np.round(result.x).astype(int)
-        Yi_optimal_complet = np.zeros(N, dtype=int)
-        Yi_optimal_complet[indices_filtre] = Yi_optimal_filtre
 
-        clients_selectionnes = np.sum(Yi_optimal_complet)
-        montant_total_alloue = np.sum(Mi * Yi_optimal_complet)
-        revenus_totaux = np.sum(Mi * Yi_optimal_complet * ri)
-        risque_moyen = np.sum(Mi * Yi_optimal_complet * PD) / montant_total_alloue if montant_total_alloue > 0 else 0
+        # Variables de décision optimales (arrondir à 0 ou 1 pour binaire)
+        Yi_optimal = np.round(result.x).astype(int)
+
+        # Calculer les métriques de la solution
+        clients_selectionnes = np.sum(Yi_optimal)
+        montant_total_alloue = np.sum(Mi * Yi_optimal)
+        revenus_totaux = np.sum(Mi * Yi_optimal * ri)
+        pertes_attendues = np.sum(Mi * Yi_optimal * PD * LGD)
+        profit_net = revenus_totaux - pertes_attendues
+        risque_moyen = np.sum(Mi * Yi_optimal * PD) / montant_total_alloue if montant_total_alloue > 0 else 0
 
         print(f"Clients sélectionnés: {clients_selectionnes:,} / {N:,}")
         print(f"Montant alloué: {montant_total_alloue:,.0f} euros")
-        print(f"Utilisation budget conservateur: {(montant_total_alloue/BUDGET_CONSERVATEUR)*100:.1f}%")
-        print(f"Utilisation budget total: {(montant_total_alloue/BUDGET_TOTAL)*100:.1f}%")
-        print(f"Revenus attendus: {revenus_totaux:,.0f} euros")
-        if montant_total_alloue > 0:
-            print(f"Rentabilité: {(revenus_totaux/montant_total_alloue)*100:.2f}%")
+        print(f"Utilisation budget: {(montant_total_alloue/BUDGET_UTILISE)*100:.1f}% du budget alloué")
+        print(f"Utilisation budget total: {(montant_total_alloue/BUDGET_TOTAL)*100:.1f}% du budget total")
+        print(f"Revenus totaux: {revenus_totaux:,.0f} euros")
+        print(f"Pertes attendues: {pertes_attendues:,.0f} euros")
+        print(f"Profit net: {profit_net:,.0f} euros")
         print(f"Risque moyen: {risque_moyen*100:.2f}%")
+        if montant_total_alloue > 0:
+            print(f"ROI net: {(profit_net/montant_total_alloue)*100:.2f}%")
 
-        # Stratégie spéciale pour Scénario 2: optimiser pour 6500-7500 clients avec risque 5%
-        print(f"Optimisation spéciale pour atteindre 6500-7500 clients avec risque <= {TAUX_RISQUE*100}%")
+        # Vérifier les allocations par catégorie
+        print("\nVérification des allocations par catégorie:")
+        for categorie, pct_target in repartition_scenario2.items():
+            mask = (clients_solvables['loan_intent'] == categorie).values
+            montant_categorie = np.sum(Mi * Yi_optimal * mask)
+            pct_reel = (montant_categorie / montant_total_alloue) * 100 if montant_total_alloue > 0 else 0
+            print(f"  {categorie}: {pct_reel:.1f}% (cible: {pct_target*100:.0f}%)")
 
-        # Trier tous les clients éligibles par risque croissant
-        indices_eligibles = np.where(clients_faible_risque)[0]
-        PD_eligibles = PD[indices_eligibles]
-        Mi_eligibles = Mi[indices_eligibles]
-        ri_eligibles = ri[indices_eligibles]
-
-        # Trier par risque croissant
-        ordre_risque = np.argsort(PD_eligibles)
-
-        Yi_final = np.zeros(N, dtype=int)
-        budget_utilise = 0
-        risque_cumule = 0
-        montant_cumule = 0
-        clients_selectionnes_final = 0
-
-        # Objectif : sélectionner entre 6500-7500 clients avec risque <= 5%
-        for i in ordre_risque:
-            idx_global = indices_eligibles[i]
-            nouveau_montant = montant_cumule + Mi_eligibles[i]
-            nouveau_risque = (risque_cumule + Mi_eligibles[i] * PD_eligibles[i]) / nouveau_montant if nouveau_montant > 0 else 0
-
-            # Conditions: budget, risque, et nombre de clients
-            if (budget_utilise + Mi[idx_global] <= BUDGET_CONSERVATEUR and
-                nouveau_risque <= TAUX_RISQUE and
-                clients_selectionnes_final < 7500):  # Maximum 7500 clients
-
-                Yi_final[idx_global] = 1
-                budget_utilise += Mi[idx_global]
-                risque_cumule += Mi_eligibles[i] * PD_eligibles[i]
-                montant_cumule = nouveau_montant
-                clients_selectionnes_final += 1
-
-                # Arrêter si on a atteint au moins 6500 clients et que le prochain ajout dépasserait 5%
-                if clients_selectionnes_final >= 6500:
-                    # Vérifier si on peut encore ajouter des clients sans dépasser 5%
-                    if i + 1 < len(ordre_risque):
-                        next_idx = indices_eligibles[ordre_risque[i + 1]]
-                        next_montant = montant_cumule + Mi_eligibles[ordre_risque[i + 1]]
-                        next_risque = (risque_cumule + Mi_eligibles[ordre_risque[i + 1]] * PD_eligibles[ordre_risque[i + 1]]) / next_montant
-                        if next_risque > TAUX_RISQUE:
-                            break
-
-        Yi_optimal_complet = Yi_final
-        clients_selectionnes = np.sum(Yi_optimal_complet)
-        montant_total_alloue = np.sum(Mi * Yi_optimal_complet)
-        revenus_totaux = np.sum(Mi * Yi_optimal_complet * ri)
-        risque_moyen = np.sum(Mi * Yi_optimal_complet * PD) / montant_total_alloue if montant_total_alloue > 0 else 0
-
-        print(f"Sélection optimisée: {clients_selectionnes:,} clients")
-        print(f"Risque final: {risque_moyen*100:.2f}%")
-        print(f"Budget utilisé: {montant_total_alloue:,.0f} euros ({(montant_total_alloue/BUDGET_CONSERVATEUR)*100:.1f}%)")
-        
         # Ajouter les résultats au DataFrame
-        clients_solvables['Yi_optimal'] = Yi_optimal_complet
-        clients_solvables['credit_alloue'] = Yi_optimal_complet
-        clients_solvables['montant_alloue'] = Mi * Yi_optimal_complet
-        clients_solvables['revenus_attendus'] = Mi * Yi_optimal_complet * ri
+        clients_solvables['Yi_optimal'] = Yi_optimal
+        clients_solvables['credit_alloue'] = Yi_optimal
+        clients_solvables['montant_alloue'] = Mi * Yi_optimal
+        clients_solvables['revenus_attendus'] = Mi * Yi_optimal * ri
+        clients_solvables['pertes_attendues'] = Mi * Yi_optimal * PD * LGD
+        clients_solvables['profit_net'] = clients_solvables['revenus_attendus'] - clients_solvables['pertes_attendues']
         
     else:
         print("Échec de l'optimisation:", result.message)
-        # Solution de secours très conservatrice
-        print("Application d'une solution de secours ultra-conservatrice...")
-        
-        # Sélectionner les 500 clients avec le plus faible risque
-        indices_ultra_faible_risque = np.argsort(PD)[:min(500, len(PD))]
-        Yi_secours = np.zeros(N, dtype=int)
-        
+        print("Application d'une solution heuristique...")
+
+        # Trier les clients par profit net décroissant
+        profit_net_individuel = Mi * ri - PD * LGD * Mi
+        indices_tries = np.argsort(-profit_net_individuel)
+
+        Yi_heuristique = np.zeros(N, dtype=int)
         budget_utilise = 0
-        for idx in indices_ultra_faible_risque:
-            if budget_utilise + Mi[idx] <= BUDGET_CONSERVATEUR:
-                Yi_secours[idx] = 1
-                budget_utilise += Mi[idx]
-        
-        clients_solvables['Yi_optimal'] = Yi_secours
-        clients_solvables['credit_alloue'] = Yi_secours
-        clients_solvables['montant_alloue'] = Mi * Yi_secours
-        clients_solvables['revenus_attendus'] = Mi * Yi_secours * ri
-        
-        # Recalculer les métriques
-        clients_selectionnes = np.sum(Yi_secours)
-        montant_total_alloue = np.sum(Mi * Yi_secours)
-        revenus_totaux = np.sum(Mi * Yi_secours * ri)
-        risque_moyen = np.sum(Mi * Yi_secours * PD) / montant_total_alloue if montant_total_alloue > 0 else 0
+        risque_cumule = 0
+
+        for idx in indices_tries:
+            nouveau_budget = budget_utilise + Mi[idx]
+            nouveau_risque_total = risque_cumule + Mi[idx] * PD[idx]
+            nouveau_risque_moyen = nouveau_risque_total / nouveau_budget if nouveau_budget > 0 else 0
+
+            if (nouveau_budget <= BUDGET_UTILISE and
+                nouveau_risque_moyen <= TAUX_RISQUE):
+                Yi_heuristique[idx] = 1
+                budget_utilise = nouveau_budget
+                risque_cumule = nouveau_risque_total
+
+        # Calculer les métriques de la solution heuristique
+        clients_selectionnes = np.sum(Yi_heuristique)
+        montant_total_alloue = np.sum(Mi * Yi_heuristique)
+        revenus_totaux = np.sum(Mi * Yi_heuristique * ri)
+        pertes_attendues = np.sum(Mi * Yi_heuristique * PD * LGD)
+        profit_net = revenus_totaux - pertes_attendues
+        risque_moyen = np.sum(Mi * Yi_heuristique * PD) / montant_total_alloue if montant_total_alloue > 0 else 0
+
+        print(f"Solution heuristique: {clients_selectionnes:,} clients")
+        print(f"Montant alloué: {montant_total_alloue:,.0f} euros")
+        print(f"Profit net: {profit_net:,.0f} euros")
+        print(f"Risque: {risque_moyen*100:.2f}%")
+
+        # Ajouter les résultats au DataFrame
+        clients_solvables['Yi_optimal'] = Yi_heuristique
+        clients_solvables['credit_alloue'] = Yi_heuristique
+        clients_solvables['montant_alloue'] = Mi * Yi_heuristique
+        clients_solvables['revenus_attendus'] = Mi * Yi_heuristique * ri
+        clients_solvables['pertes_attendues'] = Mi * Yi_heuristique * PD * LGD
+        clients_solvables['profit_net'] = clients_solvables['revenus_attendus'] - clients_solvables['pertes_attendues']
 
 except Exception as e:
     print(f"Erreur lors de l'optimisation: {e}")
@@ -478,7 +444,7 @@ if 'credit_alloue' in clients_solvables.columns:
     print(f"Clients approuvés: {clients_approuves_total:,}")
     print(f"Taux d'approbation: {taux_approbation:.1f}%")
     print(f"Montant alloué: {montant_total_alloue:,.0f} euros")
-    print(f"Budget conservateur utilisé: {(montant_total_alloue/BUDGET_CONSERVATEUR)*100:.1f}%")
+    print(f"Budget utilisé: {(montant_total_alloue/BUDGET_TOTAL)*100:.1f}%")
     print(f"Budget total utilisé: {(montant_total_alloue/BUDGET_TOTAL)*100:.1f}%")
     print(f"ROI estimé: {(revenus_totaux/montant_total_alloue)*100:.2f}%")
 
@@ -524,7 +490,7 @@ if 'credit_alloue' in clients_solvables.columns:
                 'Sécurisation des Actifs',
                 TAUX_RISQUE * 100,
                 BUDGET_TOTAL,
-                BUDGET_CONSERVATEUR,
+                BUDGET_TOTAL,
                 0.25,
                 repartition_scenario2['EDUCATION'] * 100,
                 repartition_scenario2['MEDICAL'] * 100,

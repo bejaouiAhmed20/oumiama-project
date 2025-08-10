@@ -26,8 +26,8 @@ Ce projet implémente un système d'optimisation pour l'allocation de crédits b
 - `README_Scenario_2.md` - Guide du Scénario 2
 
 ### Résultats
-- `Scenario_1_Optimisation_Resultats.xlsx` - Résultats Scénario 1 (8,000 clients)
-- `Scenario_2_Optimisation_Resultats.xlsx` - Résultats Scénario 2 (7,000 clients)
+- `Scenario_1_Optimisation_Resultats.xlsx` - Résultats Scénario 1 (9,338 clients)
+- `Scenario_2_Optimisation_Resultats.xlsx` - Résultats Scénario 2 (8,414 clients)
 
 ## Scénarios Implémentés
 
@@ -86,6 +86,53 @@ Scénario 2 - Sécurisation des Actifs:
 ```bash
 python partie_2_scenario_2.py
 ```
+
+## Modèle Mathématique
+
+### Fonction Objectif
+Maximiser le profit net: `Σ(ri × Mi × Yi - PDi × LGD × Mi × Yi)`
+
+### Contraintes
+- **Budget**: Σ(Mi × Yi) ≤ B
+- **Risque**: Σ(PDi × Mi × Yi) ≤ TR × B
+- **Allocation**: Contraintes par catégorie de prêt
+- **Variables**: Yi ∈ {0,1} (binaires)
+
+### Paramètres Clés
+- **Budget (B)**: 93,729,390 euros (identique pour les deux scénarios)
+- **LGD**: 60% (Loss Given Default)
+- **PD**: [0, 0.3] (Probabilité de Défaut calibrée par client)
+
+## Résultats Finaux
+
+| Métrique | Scénario 1 | Scénario 2 |
+|----------|-------------|-------------|
+| Clients sélectionnés | 9,338 | 8,414 |
+| Âge moyen | 30.8 ans | 30.3 ans |
+| PD moyen | 5.2% | 4.7% |
+| Risque portfolio | 5.97% | 5.00% |
+| ROI net | 11.47% | 9.27% |
+| Budget utilisé | 95.0% | 75.0% |
+
+## Validation
+
+✅ **Toutes les exigences respectées**:
+- Scénario 1 > Scénario 2 (clients, âge, PD)
+- Contraintes de risque respectées
+- Allocations par catégorie conformes
+- Modèle d'optimisation linéaire complet
+
+## Prérequis
+
+- Python 3.8+
+- pandas, numpy, scipy
+- matplotlib, seaborn
+- openpyxl
+
+## Auteur
+
+Équipe d'Optimisation Bancaire
+Date: 2024
 
 ### Résultats Générés
 Chaque scénario génère automatiquement:
